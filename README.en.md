@@ -8,6 +8,7 @@
 
 One 4K camera films the whole stage; In Frame finds the speaker and smoothly follows them with a crop, like a human camera operator.
 
+[![Build](https://github.com/mynamevladd/v-kadre/actions/workflows/build.yml/badge.svg)](https://github.com/mynamevladd/v-kadre/actions/workflows/build.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![OBS](https://img.shields.io/badge/OBS%20Studio-28%2B-302E31)
@@ -64,7 +65,7 @@ Nothing is installed into OBS: the program talks to OBS's built-in WebSocket ser
 
 ## Quick start
 
-1. Download `VKadre.exe` from [Releases](../../releases) and unpack it together with the `models` folder.
+1. Download `VKadre-windows-x64.zip` from [Releases](../../releases) and unpack it. Keep the `models` folder next to `VKadre.exe`.
 2. **OBS:** Tools → WebSocket Server Settings → enable.
 3. Create a scene and add the 4K camera as **one** source. In other scenes add the camera as an *Existing source*.
 4. Start In Frame and enter the port and password from OBS in **Settings**.

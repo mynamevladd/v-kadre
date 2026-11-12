@@ -8,6 +8,7 @@
 
 Камера снимает всю сцену в 4K, а «В кадре» находит спикера и плавно ведёт кадр за ним, как живой оператор.
 
+[![Build](https://github.com/mynamevladd/v-kadre/actions/workflows/build.yml/badge.svg)](https://github.com/mynamevladd/v-kadre/actions/workflows/build.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)
 ![OBS](https://img.shields.io/badge/OBS%20Studio-28%2B-302E31)
@@ -64,7 +65,7 @@ OBS ◄──(WebSocket: crop элемента сцены, 30 раз/с)──�
 
 ## Быстрый старт
 
-1. Скачайте `VKadre.exe` со страницы [Releases](../../releases) и распакуйте вместе с папкой `models`.
+1. Скачайте `VKadre-windows-x64.zip` со страницы [Releases](../../releases) и распакуйте. Папка `models` должна лежать рядом с `VKadre.exe`.
 2. **OBS:** Инструменты → Настройки сервера WebSocket → включить.
 3. Создайте сцену (например, «Проповедь») и добавьте в неё 4K-камеру **одним** источником. Для других сцен добавляйте камеру как *Существующий источник*.
 4. Запустите «В кадре», в **Настройках** введите порт и пароль из OBS.
