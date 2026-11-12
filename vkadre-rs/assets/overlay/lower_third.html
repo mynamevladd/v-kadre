@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>В кадре · плашка</title>
+<!--
+  Lower third for OBS (Browser Source, 1920×1080, transparent).
+  «В кадре» rewrites the DATA block below and turns the source on; the page plays in,
+  holds for `duration` seconds and plays out by itself.
+  Preview in a browser: lower_third.html?name=Иван%20Петров&title=Пастор&duration=6&loop=1
+  Options (DATA or query): accent=#rrggbb, plate=dark|light|color, anim=wipe|slide|rise|fade, speed=0.5..2
+-->
+<style>
+  @font-face { font-family: "Unbounded"; src: url("fonts/Unbounded-Black.ttf"); font-weight: 900; }
+  @font-face { font-family: "Manrope"; src: url("fonts/Manrope-Bold.ttf"); font-weight: 700; }
+  @font-face { font-family: "Manrope"; src: url("fonts/Manrope-ExtraBold.ttf"); font-weight: 800; }
+
+  :root {
+    --accent: #ff9a8b;
+    --spine: var(--accent);
+    --ink: #f4f1ef;
+    --ink-2: rgba(244, 241, 239, .78);
+    --plate: rgba(8, 8, 10, 0.78);
+    --t: 1;                                   /* time scale: 2 = twice slower */
+    --ease: cubic-bezier(.16, .84, .24, 1);
+    --ease-in: cubic-bezier(.6, 0, .84, .3);
+  }
+  .plate-light { --plate: rgba(246, 244, 242, 0.92); --ink: #141416; --ink-2: rgba(20, 20, 22, .72); }
+  .plate-color { --plate: var(--accent); --spine: #141416; --ink: #141416; --ink-2: rgba(20, 20, 22, .74); }
+
+  html, body { margin: 0; width: 1920px; height: 1080px; background: transparent; overflow: hidden; }
+  body { font-family: "Manrope", "Segoe UI", sans-serif; }
+  body.preview { background: linear-gradient(135deg, #2b2f3a, #4a3d3a 60%, #1d1f26); }
+
+  .lt {
+    position: absolute; left: 112px; bottom: 118px;
+    display: grid; grid-template-columns: 6px auto; column-gap: 0;
+  }
+  /* accent spine: grows first */
+  .spine {
+    grid-row: 1 / span 2; background: var(--spine);
+    transform: scaleY(0); transform-origin: 50% 100%;
+    animation: spine-in calc(.45s * var(--t)) var(--ease) calc(.05s * var(--t)) forwards;
+  }
+  .plate {
+    position: relative; background: var(--plate);
+    -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    padding: 26px 40px 26px 30px;
+    clip-path: inset(0 100% 0 0);
+    animation: wipe-in calc(.7s * var(--t)) var(--ease) calc(.32s * var(--t)) forwards;
+  }
+  .name, .title { display: block; overflow: hidden; white-space: nowrap; }
+  .name span, .title span { display: inline-block; transform: translateY(110%); }
+  .name span {
+    font-family: "Unbounded", "Arial Black", sans-serif; font-weight: 900;
+    font-size: 46px; line-height: 1.12; letter-spacing: .01em; text-transform: uppercase; color: var(--ink);
+    animation: rise calc(.7s * var(--t)) var(--ease) calc(.55s * var(--t)) forwards;
+  }
+  .title { margin-top: 8px; }
+  .title span {
+    font-weight: 700; font-size: 25px; line-height: 1.3; color: var(--ink-2);
+    animation: rise calc(.7s * var(--t)) var(--ease) calc(.68s * var(--t)) forwards;
+  }
+  .title span::before {
+    content: ""; display: inline-block; width: 22px; height: 3px; margin: 0 14px 6px 0;
+    background: var(--spine); vertical-align: middle;
+  }
+  /* viewfinder corner — the app's signature */
+  .corner {
+    position: absolute; right: -12px; top: -12px; width: 22px; height: 22px;
+    border-top: 3px solid var(--accent); border-right: 3px solid var(--accent);
+    opacity: 0; animation: corner-in calc(.5s * var(--t)) var(--ease) calc(.9s * var(--t)) forwards;
+  }
+
+  .out .spine { animation: spine-out calc(.5s * var(--t)) var(--ease-in) calc(.32s * var(--t)) forwards; transform: scaleY(1); }
+  .out .plate { animation: wipe-out calc(.55s * var(--t)) var(--ease-in) forwards; clip-path: inset(0 0 0 0); }
+  .out .name span, .out .title span { transform: none; }
+  .out .corner { animation: fade-out calc(.2s * var(--t)) linear forwards; opacity: 1; }
+
+  /* ── other entrances: the whole plate moves as one piece ── */
+  .anim-slide .lt .spine, .anim-slide .lt .plate, .anim-slide .lt .name span, .anim-slide .lt .title span,
+  .anim-rise .lt .spine, .anim-rise .lt .plate, .anim-rise .lt .name span, .anim-rise .lt .title span,
+  .anim-fade .lt .spine, .anim-fade .lt .plate, .anim-fade .lt .name span, .anim-fade .lt .title span {
+    animation: none; transform: none; clip-path: none;
+  }
+  .anim-slide .lt .corner, .anim-rise .lt .corner, .anim-fade .lt .corner { animation: none; opacity: 1; transform: none; }
+  .anim-slide .lt, .anim-rise .lt, .anim-fade .lt { opacity: 0; }
+
+  .anim-slide .lt { animation: slide-in calc(.8s * var(--t)) var(--ease) calc(.05s * var(--t)) forwards; }
+  .anim-slide .lt.out { opacity: 1; animation: slide-out calc(.6s * var(--t)) var(--ease-in) forwards; }
+  .anim-rise .lt { animation: rise-in calc(.8s * var(--t)) var(--ease) calc(.05s * var(--t)) forwards; }
+  .anim-rise .lt.out { opacity: 1; animation: rise-out calc(.6s * var(--t)) var(--ease-in) forwards; }
+  .anim-fade .lt { animation: fade-in calc(.9s * var(--t)) ease-out calc(.05s * var(--t)) forwards; }
+  .anim-fade .lt.out { opacity: 1; animation: fade-out calc(.7s * var(--t)) ease-in forwards; }
+
+  @keyframes spine-in { to { transform: scaleY(1); } }
+  @keyframes spine-out { to { transform: scaleY(0); } }
+  @keyframes wipe-in { to { clip-path: inset(0 0 0 0); } }
+  @keyframes wipe-out { to { clip-path: inset(0 100% 0 0); } }
+  @keyframes rise { to { transform: translateY(0); } }
+  @keyframes corner-in { from { opacity: 0; transform: translate(-6px, 6px); } to { opacity: 1; transform: none; } }
+  @keyframes fade-out { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes fade-in { from { opacity: 0; filter: blur(6px); } to { opacity: 1; filter: none; } }
+  @keyframes slide-in { from { opacity: 0; transform: translateX(-90px); } to { opacity: 1; transform: none; } }
+  @keyframes slide-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateX(-90px); } }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(60px); } to { opacity: 1; transform: none; } }
+  @keyframes rise-out { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(40px); } }
+</style>
+</head>
+<body>
+<div class="lt" id="lt">
+  <div class="spine"></div>
+  <div class="plate">
+    <span class="name"><span id="name"></span></span>
+    <span class="title" id="title-row"><span id="title"></span></span>
+  </div>
+  <i class="corner"></i>
+</div>
+<script>
+/*DATA*/var DATA = {"name": "Имя Фамилия", "title": "Служение", "duration": 7, "accent": "#ff9a8b", "plate": "dark", "anim": "wipe", "speed": 1, "loop": false};/*END*/
+(function () {
+  var q = new URLSearchParams(location.search);
+  function opt(k, def) { return q.get(k) !== null ? q.get(k) : (DATA[k] !== undefined ? DATA[k] : def); }
+  var d = {
+    name: opt("name", ""),
+    title: opt("title", ""),
+    duration: parseFloat(opt("duration", 7)),
+    accent: opt("accent", "#ff9a8b"),
+    plate: opt("plate", "dark"),
+    anim: opt("anim", "wipe"),
+    speed: Math.min(3, Math.max(0.25, parseFloat(opt("speed", 1)) || 1)),
+    loop: q.get("loop") === "1" || DATA.loop === true
+  };
+  var t = 1 / d.speed;
+  var root = document.documentElement;
+  root.style.setProperty("--accent", d.accent);
+  root.style.setProperty("--t", t);
+  document.body.classList.add("plate-" + d.plate, "anim-" + d.anim);
+  if (d.loop) document.body.classList.add("preview");
+  document.getElementById("name").textContent = d.name;
+  document.getElementById("title").textContent = d.title;
+  if (!d.title) document.getElementById("title-row").style.display = "none";
+
+  var lt = document.getElementById("lt");
+  function play() {
+    lt.classList.remove("out");
+    var clone = lt.cloneNode(true);       // restart CSS animations
+    lt.parentNode.replaceChild(clone, lt);
+    lt = clone;
+    setTimeout(function () { lt.classList.add("out"); }, (d.duration + 1.2 * t) * 1000);
+    if (d.loop) setTimeout(play, (d.duration + 3.2 * t) * 1000);
+  }
+  play();
+})();
+</script>
+</body>
+</html>

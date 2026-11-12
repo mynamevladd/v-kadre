@@ -1,0 +1,1935 @@
+// «В кадре» — main window as a broadcast console.
+//
+// Header: logo · status capsule (OBS · tracking · start button) · settings.
+// Left: the camera monitor with a floating tool bar, and the OBS scene bus.
+// Right: the program monitor (what viewers see), readouts and settings on tabs.
+// Palette is the ecosystem's: near-black cards, one peach accent for what is on air or selected,
+// red only for the live dot, faults and the stop button.
+//
+// Every visible string goes through I18n.tr(): the Russian text is the key, Rust holds the English.
+
+import { ComboBox, LineEdit, SpinBox, ScrollView } from "std-widgets.slint";
+import "../assets/fonts/Unbounded-Black.ttf";
+import "../assets/fonts/Manrope-Medium.ttf";
+import "../assets/fonts/Manrope-Bold.ttf";
+import "../assets/fonts/Manrope-ExtraBold.ttf";
+import "../assets/fonts/JetBrainsMono-ExtraBold.ttf";
+
+export global T {
+    out property <color> bg: #0b0b0b;
+    out property <color> card: #121212;
+    out property <color> card-2: #171717;
+    out property <color> surface-hover: #1c1c1c;
+    out property <color> surface-sel: #1f1311;
+    out property <color> stage: #0e0e0e;
+    out property <color> line-soft: #1a1a1a;
+    out property <color> line: #222222;
+    out property <color> line-strong: #2c2c2c;
+    out property <color> line-hover: #3a3a3a;
+    out property <color> text: #f2f2f2;
+    out property <color> text-2: #d9d9d9;
+    out property <color> text-3: #bdbdbd;
+    out property <color> text-muted: #9a9a9a;
+    out property <color> text-meta: #7d7d7d;
+    out property <color> text-faint: #666666;
+    out property <color> accent: #ff9a8b;
+    out property <color> accent-hover: #ffb4a8;
+    out property <color> accent-tint: #ff9a8b26;
+    out property <color> on-accent: #3a0d08;
+    out property <color> live: #ff3b3b;
+    out property <color> warn: #ffb547;
+    out property <color> danger: #ff5a5a;
+    out property <color> danger-fill: #e0262b;
+    out property <string> ui: "Manrope";
+    out property <string> mono: "JetBrains Mono";
+}
+
+/// Translation: Russian strings are the keys; `en` switches every binding at once.
+export global I18n {
+    in property <bool> en;
+    pure callback lookup(string) -> string;
+    public pure function tr(s: string) -> string {
+        return en ? lookup(s) : s;
+    }
+}
+
+/// Number formatting lives in Rust (Slint has no format strings).
+export global Fmt {
+    pure callback num(float, string, bool) -> string;
+}
+
+export struct PersonBox { x: float, y: float, w: float, h: float, kind: int, tag: string }
+export struct Dot { x: float, y: float }
+/// index: position in OBS (1-based); mode: 0 off, 1 track, 2 duo, 3 wide; on-air: the engine follows it now
+export struct SceneRow { index: int, name: string, mode: int, on-air: bool, has-camera: bool }
+
+// ── Settings shown in the panel. Rust loads them in and reads them back on `changed`. ──
+export global Cfg {
+    in-out property <bool> running;
+    in-out property <[string]> sources;
+    in-out property <int> source-index: -1;
+    in-out property <[SceneRow]> scene-rows;
+    in-out property <string> scenes-empty-text: "Подключитесь к OBS, чтобы увидеть сцены";
+    in-out property <int> shot-index: 1;
+    in-out property <float> fixed-zoom: 2.0;
+    in-out property <float> max-zoom: 3.0;
+    in-out property <float> headroom: 0.08;
+    in-out property <bool> auto-cut;
+    in-out property <int> cut-index: 1;
+    in-out property <float> cut-hold: 6;
+    in-out property <float> smooth: 0.7;
+    in-out property <float> deadzone: 0.12;
+    in-out property <float> speed: 0.35;
+    in-out property <float> zoom-smooth: 2.0;
+    in-out property <bool> reid: true;
+    in-out property <bool> wide-on-lost: true;
+    in-out property <float> lost-timeout: 4.0;
+    in-out property <string> lt-name;
+    /// the name as the plate shows it (upper case), set by Rust
+    in-out property <string> lt-name-upper;
+    in-out property <string> lt-title;
+    in-out property <float> lt-duration: 7;
+    in-out property <[color]> lt-swatches;
+    in-out property <int> lt-color-index;
+    in-out property <color> lt-custom-color: #ffffff;
+    in-out property <string> lt-custom-hex;
+    in-out property <int> lt-plate-index;
+    in-out property <int> lt-anim-index;
+    in-out property <float> lt-speed: 1.0;
+    in-out property <bool> watchdog: true;
+    in-out property <bool> watchdog-sound: true;
+    in-out property <bool> watchdog-switch;
+    in-out property <[string]> backup-scenes;
+    in-out property <int> backup-index: -1;
+    in-out property <bool> use-gpu: true;
+    in-out property <int> detect-fps: 10;
+    in-out property <string> device: "—";
+
+    callback changed();
+    callback source-selected(int);
+    callback scene-mode-changed(int, int);
+    callback custom-hex-edited(string);
+    callback refresh();
+    callback show-plate();
+    callback preview-plate();
+}
+
+// ── Basic pieces ────────────────────────────────────────────────────────────────
+
+component Label inherits Text {
+    font-family: T.ui;
+    font-weight: 500;
+    font-size: 13px;
+    color: T.text-2;
+    vertical-alignment: center;
+}
+
+component Small inherits Text {
+    font-family: T.ui;
+    font-weight: 500;
+    font-size: 12px;
+    color: T.text-muted;
+    vertical-alignment: center;
+}
+
+component Mono inherits Text {
+    font-family: T.mono;
+    font-weight: 800;
+    font-size: 12px;
+    color: T.text;
+    vertical-alignment: center;
+}
+
+/// Tiny mono caps label: СЦЕНЫ OBS, ВИД, НЕТ СИГНАЛА.
+component Tag inherits Text {
+    font-family: T.mono;
+    font-weight: 800;
+    font-size: 10px;
+    letter-spacing: 0.6px;
+    color: T.text-meta;
+    vertical-alignment: center;
+}
+
+/// LineEdit that also understands Ctrl+V/C/X/A in the Russian layout.
+/// Slint matches these shortcuts by the typed letter, and with the Russian layout the V key types «м»,
+/// so the field rejects Ctrl+м and the key event bubbles up to this FocusScope.
+component TextField {
+    in-out property <string> text <=> le.text;
+    in property <string> placeholder-text <=> le.placeholder-text;
+    in property <InputType> input-type <=> le.input-type;
+    callback edited(string);
+    callback accepted(string);
+    public function take-focus() { le.focus(); }
+    min-height: le.min-height;
+    min-width: 60px;
+    horizontal-stretch: 1;
+    FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(e) => {
+            if (!e.modifiers.control) { return reject; }
+            if (e.text == "м" || e.text == "М") { le.paste(); return accept; }
+            if (e.text == "с" || e.text == "С") { le.copy(); return accept; }
+            if (e.text == "ч" || e.text == "Ч") { le.cut(); return accept; }
+            if (e.text == "ф" || e.text == "Ф") { le.select-all(); return accept; }
+            return reject;
+        }
+        le := LineEdit {
+            width: 100%;
+            height: 100%;
+            edited(t) => { root.edited(t); }
+            accepted(t) => { root.accepted(t); }
+        }
+    }
+}
+
+/// Viewfinder corners.
+component Brackets {
+    width: 100%;
+    height: 100%;
+    in property <length> len: 10px;
+    in property <length> thick: 1px;
+    in property <color> tint: T.text-faint;
+    property <length> l: min(len, min(root.width / 3, root.height / 3));
+    Rectangle { x: 0; y: 0; width: l; height: thick; background: tint; }
+    Rectangle { x: 0; y: 0; width: thick; height: l; background: tint; }
+    Rectangle { x: root.width - l; y: 0; width: l; height: thick; background: tint; }
+    Rectangle { x: root.width - thick; y: 0; width: thick; height: l; background: tint; }
+    Rectangle { x: 0; y: root.height - thick; width: l; height: thick; background: tint; }
+    Rectangle { x: 0; y: root.height - l; width: thick; height: l; background: tint; }
+    Rectangle { x: root.width - l; y: root.height - thick; width: l; height: thick; background: tint; }
+    Rectangle { x: root.width - thick; y: root.height - l; width: thick; height: l; background: tint; }
+}
+
+/// Lucide-style icons (24×24, stroke).
+component Icon inherits Path {
+    in property <string> name;
+    in property <color> tint: T.text-2;
+    width: 16px;
+    height: 16px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: tint;
+    stroke-width: 1.8px;
+    fill: transparent;
+    commands: name == "refresh" ? "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8 M21 3v5h-5 M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16 M8 16H3v5"
+        : name == "chevron" ? "M6 9 L12 15 L18 9"
+        : name == "close" ? "M6 6 L18 18 M18 6 L6 18"
+        : "M0 0";
+}
+
+component IconButton {
+    in property <string> icon;
+    in property <bool> enabled: true;
+    callback clicked();
+    width: 30px;
+    height: 30px;
+    opacity: enabled ? 1 : 0.4;
+    Rectangle {
+        border-radius: 6px;
+        background: ta.has-hover && enabled ? T.surface-hover : transparent;
+    }
+    Icon { name: icon; x: (root.width - 16px) / 2; y: (root.height - 16px) / 2; tint: T.text-muted; }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// kind: 0 secondary (outlined), 1 primary (accent), 2 light (white fill)
+component Button {
+    in property <string> text;
+    in property <int> kind;
+    in property <bool> enabled: true;
+    in property <length> h: 36px;
+    callback clicked();
+    height: h;
+    min-width: lbl.preferred-width + 30px;
+    horizontal-stretch: 0;
+    opacity: enabled ? 1 : 0.4;
+    Rectangle {
+        border-radius: 8px;
+        border-width: kind == 0 ? 1px : 0;
+        border-color: ta.has-hover ? T.line-hover : T.line-strong;
+        background: kind == 1 ? (ta.has-hover ? T.accent-hover : T.accent)
+            : kind == 2 ? (ta.has-hover ? #ffffff : #ececec)
+            : (ta.has-hover ? T.surface-hover : transparent);
+    }
+    lbl := Label {
+        text: root.text;
+        font-weight: 700;
+        horizontal-alignment: center;
+        color: kind == 1 ? T.on-accent : kind == 2 ? #111111 : T.text-2;
+    }
+    ta := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+/// 34×20 switch. On = accent track, dark knob.
+component Switch {
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    width: 34px;
+    height: 20px;
+    opacity: enabled ? 1 : 0.4;
+    Rectangle {
+        border-radius: 10px;
+        background: checked ? T.accent : T.line-strong;
+        animate background { duration: 120ms; }
+    }
+    Rectangle {
+        x: checked ? 16px : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: checked ? T.on-accent : T.text-muted;
+        animate x { duration: 120ms; easing: ease-out; }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => {
+            checked = !checked;
+            root.toggled(checked);
+        }
+    }
+}
+
+/// Segmented control: dark track, the chosen item filled with the accent.
+component Segmented {
+    in property <[string]> items;
+    in-out property <int> index;
+    in property <bool> enabled: true;
+    callback changed(int);
+    height: 36px;
+    opacity: enabled ? 1 : 0.4;
+    Rectangle {
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: T.line;
+        background: T.card;
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            for it[i] in items : Rectangle {
+                horizontal-stretch: 1;
+                min-width: 36px;
+                border-radius: 6px;
+                background: index == i ? T.accent : sta.has-hover && enabled ? T.surface-hover : transparent;
+                Label {
+                    text: it;
+                    font-size: 12px;
+                    font-weight: index == i ? 800 : 500;
+                    horizontal-alignment: center;
+                    color: index == i ? T.on-accent : T.text-muted;
+                }
+                sta := TouchArea {
+                    enabled: root.enabled;
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if (index != i) {
+                            index = i;
+                            root.changed(i);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Label and value on top, full-width track below.
+component SliderRow {
+    in property <string> label;
+    in property <string> fmt: "f2";
+    in property <float> minimum: 0;
+    in property <float> maximum: 1;
+    in property <float> step: 0.01;
+    in property <bool> enabled: true;
+    in-out property <float> value;
+    callback changed(float);
+
+    property <float> frac: max(0, min(1, (value - minimum) / max(maximum - minimum, 0.0001)));
+    opacity: enabled ? 1 : 0.4;
+
+    function set-from(x: length) {
+        if (!enabled) { return; }
+        let f = max(0, min(1, (x - 7px) / max(track.width - 14px, 1px)));
+        let raw = minimum + f * (maximum - minimum);
+        let snapped = minimum + round((raw - minimum) / step) * step;
+        if (abs(snapped - value) > step / 10) {
+            value = snapped;
+            root.changed(value);
+        }
+    }
+
+    VerticalLayout {
+        spacing: 4px;
+        HorizontalLayout {
+            Label { text: label; font-weight: 700; color: T.text; horizontal-stretch: 1; }
+            Mono { text: Fmt.num(value, fmt, I18n.en); horizontal-alignment: right; }
+        }
+        track := Rectangle {
+            height: 18px;
+            Rectangle { x: 7px; y: (parent.height - 3px) / 2; width: parent.width - 14px; height: 3px; border-radius: 1.5px; background: T.line-strong; }
+            Rectangle { x: 7px; y: (parent.height - 3px) / 2; width: frac * (parent.width - 14px); height: 3px; border-radius: 1.5px; background: enabled ? T.accent : T.text-faint; }
+            Rectangle {
+                x: frac * (parent.width - 14px);
+                y: (parent.height - 14px) / 2;
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                background: #f5f5f5;
+                border-width: 2px;
+                border-color: ta.has-hover || ta.pressed ? T.accent : #00000000;
+            }
+            ta := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: pointer;
+                pointer-event(e) => {
+                    if (e.kind == PointerEventKind.down && e.button == PointerEventButton.left) {
+                        root.set-from(self.mouse-x);
+                    }
+                }
+                moved => {
+                    if (self.pressed) { root.set-from(self.mouse-x); }
+                }
+                scroll-event(e) => { return reject; }
+            }
+        }
+    }
+}
+
+/// Label (and an optional hint under it) left, control right.
+component Row {
+    in property <string> label;
+    in property <string> hint;
+    in property <bool> enabled: true;
+    min-height: 34px;
+    opacity: enabled ? 1 : 0.4;
+    HorizontalLayout {
+        spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            spacing: 2px;
+            horizontal-stretch: 1;
+            Label { text: label; font-weight: 700; color: T.text; wrap: word-wrap; }
+            if hint != "" : Small { text: hint; color: T.text-meta; wrap: word-wrap; }
+        }
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+/// Small bold label above a full-width control.
+component Field {
+    in property <string> label;
+    in property <bool> enabled: true;
+    opacity: enabled ? 1 : 0.4;
+    VerticalLayout {
+        spacing: 8px;
+        Label { text: label; font-size: 12px; font-weight: 700; color: T.text-muted; }
+        @children
+    }
+}
+
+/// A titled group; groups are separated by space and a hairline.
+component Group {
+    in property <string> title;
+    in property <bool> rule;
+    vertical-stretch: 0;
+    VerticalLayout {
+        spacing: 10px;
+        alignment: start;
+        if rule : Rectangle { height: 1px; background: T.line-soft; }
+        if title != "" : Label { text: title; font-size: 12px; font-weight: 700; color: T.text-muted; }
+        @children
+    }
+}
+
+component Pill {
+    in property <string> text;
+    in property <color> dot: T.accent;
+    height: 26px;
+    width: lay.preferred-width;
+    Rectangle { border-radius: 13px; background: #000000c8; border-width: 1px; border-color: T.line-strong; }
+    lay := HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 12px;
+        spacing: 8px;
+        alignment: center;
+        Rectangle { width: 6px; height: 6px; y: 10px; border-radius: 3px; background: dot; }
+        Label { text: root.text; font-size: 12px; color: T.text; }
+    }
+}
+
+/// One button of the floating tool bar; toggled = light chip.
+component ToolChip {
+    in property <string> text;
+    in property <bool> checkable;
+    in-out property <bool> checked;
+    callback clicked();
+    height: 30px;
+    width: lbl.preferred-width + 24px;
+    Rectangle {
+        border-radius: 7px;
+        background: checked ? #2a2a2a : ta.has-hover ? T.surface-hover : transparent;
+    }
+    lbl := Label {
+        text: root.text;
+        font-weight: 700;
+        horizontal-alignment: center;
+        color: checked ? T.text : ta.has-hover ? T.text : T.text-3;
+    }
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            if (checkable) { checked = !checked; }
+            root.clicked();
+        }
+    }
+}
+
+// ── Camera monitor: frame, on-air frame, people, empty states, floating tool bar ──
+
+component CameraMonitor {
+    in property <bool> has-frame;
+    in property <image> frame;
+    in property <float> aspect: 16 / 9;
+    in property <[PersonBox]> people;
+    in property <[Dot]> dots;
+    in property <float> crop-x;
+    in property <float> crop-y;
+    in property <float> crop-w: 1;
+    in property <float> crop-h: 1;
+    in property <float> zone-x;
+    in property <float> zone-y;
+    in property <float> zone-w: 1;
+    in property <float> zone-h: 1;
+    in property <bool> active;
+    in property <bool> paused;
+    in property <string> source-name;
+    in property <string> state-text;
+    in property <string> hud;
+    in property <string> message-title;
+    in property <string> message-hint;
+    /// 0 plain message, 1 no OBS (reconnect + how to), 2 ready (start)
+    in property <int> empty-kind;
+    in property <string> fault;
+    in-out property <bool> zone-mode;
+    in-out property <bool> wide-checked;
+    callback clicked(float, float);
+    callback zone-drawn(float, float, float, float);
+    callback wide-toggled(bool);
+    callback retarget();
+    callback zone-reset();
+    callback show-plate();
+    callback reconnect();
+    callback how-to();
+    callback start();
+
+    property <length> iw: min(root.width, root.height * aspect);
+    property <length> ih: iw / aspect;
+    property <length> ix: (root.width - iw) / 2;
+    property <length> iy: (root.height - ih) / 2;
+    property <length> cx: ix + crop-x * iw;
+    property <length> cy: iy + crop-y * ih;
+    property <length> cw: crop-w * iw;
+    property <length> ch: crop-h * ih;
+    property <color> frame-tint: paused ? T.warn : T.accent;
+    property <bool> dragging;
+    property <length> dx0;
+    property <length> dy0;
+
+    function nx(x: length) -> float { return max(0, min(1, (x - ix) / iw)); }
+    function ny(y: length) -> float { return max(0, min(1, (y - iy) / ih)); }
+
+    min-width: 480px;
+    min-height: 300px;
+
+    Rectangle {
+        clip: true;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: T.line-soft;
+        background: T.stage;
+
+        if has-frame : Rectangle {
+            Image { x: ix; y: iy; width: iw; height: ih; source: frame; image-fit: fill; image-rendering: smooth; }
+
+            // outside the on-air frame is dimmed
+            property <color> dim: active ? #00000080 : #00000040;
+            Rectangle { x: ix; y: iy; width: iw; height: max(0px, cy - iy); background: dim; }
+            Rectangle { x: ix; y: cy + ch; width: iw; height: max(0px, iy + ih - cy - ch); background: dim; }
+            Rectangle { x: ix; y: cy; width: max(0px, cx - ix); height: ch; background: dim; }
+            Rectangle { x: cx + cw; y: cy; width: max(0px, ix + iw - cx - cw); height: ch; background: dim; }
+
+            if zone-x > 0 || zone-y > 0 || zone-w < 1 || zone-h < 1 : Rectangle {
+                x: ix + zone-x * iw;
+                y: iy + zone-y * ih;
+                width: zone-w * iw;
+                height: zone-h * ih;
+                border-width: 1px;
+                border-color: #9a9a9a80;
+            }
+
+            for p in people : Rectangle {
+                x: ix + p.x * iw;
+                y: iy + p.y * ih;
+                width: p.w * iw;
+                height: p.h * ih;
+                if p.kind == 0 : Brackets { len: 10px; thick: 1px; tint: T.text-faint; }
+                if p.kind == 1 : Brackets { len: 14px; thick: 1.5px; tint: T.text; }
+                if p.kind == 2 : Rectangle { border-width: 1.5px; border-color: T.text; border-radius: 2px; }
+                if p.tag != "" : Rectangle {
+                    x: 0;
+                    y: parent.y - iy > 28px ? -24px : 4px;
+                    height: 20px;
+                    width: tag.preferred-width + 12px;
+                    border-radius: 4px;
+                    background: T.text;
+                    tag := Label { text: p.tag; font-size: 11px; font-weight: 700; color: #111111; horizontal-alignment: center; }
+                }
+            }
+            for d in dots : Rectangle {
+                x: ix + d.x * iw - 3px;
+                y: iy + d.y * ih - 3px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: T.accent;
+            }
+
+            Rectangle { x: cx + cw / 3; y: cy; width: 1px; height: ch; background: #ffffff18; }
+            Rectangle { x: cx + cw * 2 / 3; y: cy; width: 1px; height: ch; background: #ffffff18; }
+            Rectangle { x: cx; y: cy + ch / 3; width: cw; height: 1px; background: #ffffff18; }
+            Rectangle { x: cx; y: cy + ch * 2 / 3; width: cw; height: 1px; background: #ffffff18; }
+            Rectangle { x: cx; y: cy; width: cw; height: ch; border-width: 2px; border-color: frame-tint; }
+
+            // source and numbers, top left / top right
+            HorizontalLayout {
+                x: 14px;
+                y: 12px;
+                width: root.width - 28px;
+                height: 26px;
+                spacing: 8px;
+                Rectangle {
+                    width: src-row.preferred-width;
+                    border-radius: 6px;
+                    background: #000000b0;
+                    src-row := HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 10px;
+                        Label { text: source-name; font-size: 12px; font-weight: 700; color: T.text; }
+                        Small { text: state-text; }
+                    }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Rectangle {
+                    width: hud-t.preferred-width + 20px;
+                    border-radius: 6px;
+                    background: #000000b0;
+                    hud-t := Mono { text: hud; color: T.text-3; font-size: 11px; horizontal-alignment: center; }
+                }
+            }
+        }
+
+        // empty states
+        if !has-frame && message-title != "" : VerticalLayout {
+            alignment: center;
+            spacing: 0;
+            HorizontalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 52px;
+                    height: 52px;
+                    border-radius: 26px;
+                    background: empty-kind == 1 ? T.danger.with-alpha(0.12) : T.accent.with-alpha(0.12);
+                    Rectangle { width: 12px; height: 12px; border-radius: 6px; background: empty-kind == 1 ? T.danger : T.accent; }
+                }
+            }
+            Rectangle { height: 22px; }
+            Text { text: message-title; font-family: T.ui; font-weight: 800; font-size: 21px; color: T.text; horizontal-alignment: center; }
+            Rectangle { height: 10px; }
+            HorizontalLayout {
+                alignment: center;
+                Small { text: message-hint; font-size: 13px; color: T.text-muted; horizontal-alignment: center; wrap: word-wrap; width: min(root.width - 80px, 360px); }
+            }
+            Rectangle { height: 20px; }
+            if empty-kind == 1 : HorizontalLayout {
+                alignment: center;
+                spacing: 8px;
+                Button { text: I18n.tr("Подключиться снова"); kind: 2; clicked => { root.reconnect(); } }
+                Button { text: I18n.tr("Как настроить"); clicked => { root.how-to(); } }
+            }
+            if empty-kind == 2 : HorizontalLayout {
+                alignment: center;
+                Button { text: I18n.tr("Включить слежение"); kind: 1; clicked => { root.start(); } }
+            }
+        }
+
+        // waiting for a scene: a note over the frame
+        if has-frame && !active && message-title != "" : Rectangle {
+            x: (root.width - self.width) / 2;
+            y: (root.height - 38px) / 2;
+            height: 38px;
+            width: note.preferred-width + 32px;
+            border-radius: 8px;
+            background: #000000d8;
+            note := Label { text: message-title; color: T.text-2; horizontal-alignment: center; }
+        }
+
+        // camera watchdog: red band
+        if fault != "" : Rectangle {
+            y: 0;
+            height: 40px;
+            background: T.danger-fill;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                Rectangle { width: 8px; height: 8px; y: 16px; border-radius: 4px; background: Colors.white; }
+                Label { text: fault + I18n.tr(" — проверьте камеру"); font-weight: 700; color: Colors.white; horizontal-stretch: 1; }
+            }
+        }
+
+        if dragging : Rectangle {
+            x: min(dx0, ta.mouse-x);
+            y: min(dy0, ta.mouse-y);
+            width: abs(ta.mouse-x - dx0);
+            height: abs(ta.mouse-y - dy0);
+            border-width: 1.5px;
+            border-color: T.accent;
+            background: T.accent.with-alpha(0.12);
+        }
+        if zone-mode && !dragging : Pill {
+            x: (root.width - self.width) / 2;
+            y: 14px;
+            text: I18n.tr("Обведите зону сцены мышью");
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: zone-mode ? crosshair : default;
+        pointer-event(e) => {
+            if (!has-frame || e.button != PointerEventButton.left) { return; }
+            if (e.kind == PointerEventKind.down) {
+                if (zone-mode) {
+                    dragging = true;
+                    dx0 = self.mouse-x;
+                    dy0 = self.mouse-y;
+                } else {
+                    root.clicked(nx(self.mouse-x), ny(self.mouse-y));
+                }
+            } else if (e.kind == PointerEventKind.up && dragging) {
+                dragging = false;
+                let x0 = nx(dx0);
+                let y0 = ny(dy0);
+                let x1 = nx(self.mouse-x);
+                let y1 = ny(self.mouse-y);
+                if (abs(x1 - x0) > 0.05 && abs(y1 - y0) > 0.05) {
+                    root.zone-drawn(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1));
+                }
+            }
+        }
+    }
+
+    // floating tool bar, bottom centre
+    Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 16px;
+        width: bar.preferred-width;
+        height: 40px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: T.line-strong;
+        background: #151515f0;
+        bar := HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 5px;
+            spacing: 2px;
+            Tag { text: I18n.tr("ВИД"); }
+            Rectangle { width: 6px; }
+            VerticalLayout { alignment: center; ToolChip { text: I18n.tr("Общий"); checkable: true; checked <=> root.wide-checked; clicked => { root.wide-toggled(root.wide-checked); } } }
+            VerticalLayout { alignment: center; ToolChip { text: I18n.tr("Цель"); clicked => { root.retarget(); } } }
+            Rectangle { width: 9px; Rectangle { x: 4px; y: 11px; width: 1px; height: 18px; background: T.line-strong; } }
+            Tag { text: I18n.tr("ЗОНА"); }
+            Rectangle { width: 6px; }
+            VerticalLayout { alignment: center; ToolChip { text: I18n.tr("Выделить"); checkable: true; checked <=> root.zone-mode; } }
+            VerticalLayout { alignment: center; ToolChip { text: I18n.tr("Сбросить"); clicked => { root.zone-reset(); } } }
+            Rectangle { width: 9px; Rectangle { x: 4px; y: 11px; width: 1px; height: 18px; background: T.line-strong; } }
+            VerticalLayout { alignment: center; ToolChip { text: I18n.tr("Плашка"); clicked => { root.show-plate(); } } }
+        }
+    }
+}
+
+/// Program monitor: the crop cut from the detection frame, accent outline while live.
+component ProgramMonitor {
+    in property <bool> has-frame;
+    in property <image> frame;
+    in property <float> crop-x;
+    in property <float> crop-y;
+    in property <float> crop-w: 1;
+    in property <float> crop-h: 1;
+    in property <bool> live;
+    in property <string> scene;
+    in property <string> meta;
+    height: self.width * 9 / 16 + 30px;
+    Rectangle {
+        clip: true;
+        border-radius: 10px;
+        background: T.card;
+        border-width: live ? 2px : 1px;
+        border-color: live ? T.accent : T.line;
+        VerticalLayout {
+            padding: live ? 2px : 1px;
+            Rectangle {
+                vertical-stretch: 1;
+                clip: true;
+                background: T.stage;
+                border-radius: 9px;
+                if has-frame : Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: frame;
+                    source-clip-x: round(crop-x * frame.width);
+                    source-clip-y: round(crop-y * frame.height);
+                    source-clip-width: max(1, round(crop-w * frame.width));
+                    source-clip-height: max(1, round(crop-h * frame.height));
+                    image-fit: fill;
+                    image-rendering: smooth;
+                }
+                if !has-frame : Path {
+                    width: parent.width;
+                    height: parent.height;
+                    viewbox-width: 160;
+                    viewbox-height: 90;
+                    stroke: #ffffff0d;
+                    stroke-width: 3px;
+                    commands: "M-90 90 L0 0 M-82 90 L8 0 M-74 90 L16 0 M-66 90 L24 0 M-58 90 L32 0 M-50 90 L40 0 M-42 90 L48 0 M-34 90 L56 0 M-26 90 L64 0 M-18 90 L72 0 M-10 90 L80 0 M-2 90 L88 0 M6 90 L96 0 M14 90 L104 0 M22 90 L112 0 M30 90 L120 0 M38 90 L128 0 M46 90 L136 0 M54 90 L144 0 M62 90 L152 0 M70 90 L160 0 M78 90 L168 0 M86 90 L176 0 M94 90 L184 0 M102 90 L192 0 M110 90 L200 0 M118 90 L208 0 M126 90 L216 0 M134 90 L224 0 M142 90 L232 0 M150 90 L240 0 M158 90 L248 0";
+                }
+                if !has-frame : Tag { text: I18n.tr("НЕТ СИГНАЛА"); horizontal-alignment: center; }
+            }
+            HorizontalLayout {
+                height: 28px;
+                padding-left: 10px;
+                padding-right: 10px;
+                spacing: 7px;
+                Rectangle { width: 7px; height: 7px; y: 10.5px; border-radius: 3.5px; background: live ? T.live : T.text-faint; }
+                Label { text: I18n.tr("Эфир"); font-size: 12px; font-weight: 700; color: live ? T.text : T.text-muted; }
+                if scene != "" : Label { text: "· " + scene; font-size: 12px; color: T.text-2; overflow: elide; }
+                Rectangle { horizontal-stretch: 1; }
+                Mono { text: meta != "" ? meta : "—"; font-size: 11px; color: T.text-meta; }
+            }
+        }
+    }
+}
+
+component Readout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> mono;
+    in property <bool> bad;
+    in property <bool> first;
+    horizontal-stretch: 1;
+    if !first : Rectangle { x: 0; y: 10px; width: 1px; height: parent.height - 20px; background: T.line; }
+    VerticalLayout {
+        padding-left: 12px;
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 4px;
+        Small { text: label; font-size: 11px; color: T.text-meta; }
+        if mono : Mono { text: value; font-size: 14px; color: bad ? T.danger : T.text; }
+        if !mono : Label { text: value; font-size: 14px; font-weight: 700; color: bad ? T.danger : T.text; overflow: elide; }
+    }
+}
+
+/// One OBS scene on the bus: number, name, behaviour menu.
+component SceneTile {
+    in property <int> index;
+    in property <string> name;
+    in property <int> mode;
+    in property <bool> on-air;
+    in property <bool> has-camera: true;
+    in property <bool> enabled: true;
+    callback pick(int);
+    width: 250px;
+    height: 104px;
+    opacity: has-camera ? 1 : 0.45;
+    property <[string]> modes: [I18n.tr("Не трогать"), I18n.tr("Вести"), I18n.tr("Дуэт"), I18n.tr("Общий")];
+    Rectangle {
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: on-air ? T.accent : mode > 0 ? T.accent.with-alpha(0.45) : T.line;
+        background: on-air ? T.surface-sel : T.card-2;
+        VerticalLayout {
+            padding: 14px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 6px;
+                Tag {
+                    text: (index < 10 ? "0" : "") + index
+                        + (on-air ? I18n.tr(" · В ЭФИРЕ") : mode > 0 ? I18n.tr(" · ВЫБРАНА") : !has-camera ? I18n.tr(" · НЕТ КАМЕРЫ") : "");
+                    color: on-air || mode > 0 ? T.accent : T.text-faint;
+                }
+                if on-air : Rectangle { width: 6px; height: 6px; y: 4px; border-radius: 3px; background: T.live; }
+            }
+            Label { text: name; font-size: 15px; font-weight: 800; color: T.text; overflow: elide; }
+            Rectangle { vertical-stretch: 1; }
+            Rectangle { height: 1px; background: T.line; }
+            HorizontalLayout {
+                height: 22px;
+                Small { text: I18n.tr("Поведение"); color: T.text-meta; horizontal-stretch: 1; }
+                Label { text: modes[mode]; font-size: 12px; font-weight: 700; color: mode > 0 ? T.text : T.text-muted; }
+                if enabled : Icon { name: "chevron"; width: 12px; height: 12px; y: 5px; tint: T.text-muted; }
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        mouse-cursor: pointer;
+        clicked => { menu.show(); }
+    }
+    menu := PopupWindow {
+        x: root.width - 170px;
+        y: root.height + 4px;
+        width: 170px;
+        Rectangle {
+            background: T.card-2;
+            border-width: 1px;
+            border-color: T.line-strong;
+            border-radius: 8px;
+            VerticalLayout {
+                padding: 4px;
+                for m[i] in modes : Rectangle {
+                    height: 32px;
+                    border-radius: 6px;
+                    background: mta.has-hover ? T.surface-hover : transparent;
+                    Label {
+                        x: 10px;
+                        text: m;
+                        color: i == mode ? T.accent : T.text-2;
+                        font-weight: i == mode ? 700 : 500;
+                    }
+                    mta := TouchArea { mouse-cursor: pointer; clicked => { root.pick(i); } }
+                }
+            }
+        }
+    }
+}
+
+component Keycap {
+    in property <string> key;
+    in property <string> text;
+    HorizontalLayout {
+        spacing: 12px;
+        Rectangle {
+            width: max(k.preferred-width + 14px, 60px);
+            height: 26px;
+            border-radius: 6px;
+            background: T.card-2;
+            border-width: 1px;
+            border-color: T.line-strong;
+            k := Mono { text: key; font-size: 11px; horizontal-alignment: center; }
+        }
+        Label { text: root.text; horizontal-stretch: 1; }
+    }
+}
+
+// ── Name plate preview: the same plate as the OBS page (lower_third.html), drawn and animated here ──
+//
+// The stage shows the lower-left quarter of a 1920×1080 frame (x 0–960, y 540–1080), where the plate
+// sits, so it is big enough to judge; positions and timings follow the page's CSS, times scale with 1/speed.
+component PlatePreview {
+    in property <string> name;
+    in property <string> title;
+    in property <color> accent;
+    /// 0 dark, 1 light, 2 color
+    in property <int> plate;
+    /// 0 wipe, 1 slide, 2 rise, 3 fade
+    in property <int> anim;
+    in property <float> speed: 1;
+    in property <float> duration: 7;
+    in property <bool> has-frame;
+    in property <image> frame;
+    in property <float> crop-x;
+    in property <float> crop-y;
+    in property <float> crop-w: 1;
+    in property <float> crop-h: 1;
+    in-out property <bool> playing;
+    in-out property <float> time;
+
+    height: self.width * 9 / 16;
+
+    // stage scale: preview px per 1080p px
+    property <float> sc: self.width / 960px;
+    property <float> tk: 1 / max(speed, 0.25);
+    property <float> t-out: duration + 1.2 * tk;
+    property <float> t-end: t-out + 1.0 * tk;
+    // idle: the plate stands fully in, so every change is visible at once
+    property <float> tt: playing ? time : 2.0 * tk;
+    property <bool> outing: playing && time >= t-out;
+    property <float> to: outing ? time - t-out : 0;
+
+    pure function prog(t: float, start: float, dur: float) -> float {
+        return max(0, min(1, (t - start) / dur));
+    }
+    // ≈ the page's cubic-bezier(.16,.84,.24,1) and (.6,0,.84,.3)
+    pure function ease-out(x: float) -> float {
+        return 1 - (1 - x) * (1 - x) * (1 - x);
+    }
+    pure function ease-in(x: float) -> float {
+        return x * x * x;
+    }
+
+    // «Шторка»: parts one by one
+    property <float> spine-k: anim != 0 ? 1 : outing ? 1 - ease-in(prog(to, 0.32 * tk, 0.5 * tk)) : ease-out(prog(tt, 0.05 * tk, 0.45 * tk));
+    property <float> wipe-k: anim != 0 ? 1 : outing ? 1 - ease-in(prog(to, 0, 0.55 * tk)) : ease-out(prog(tt, 0.32 * tk, 0.7 * tk));
+    property <float> name-k: anim != 0 || outing ? 1 : ease-out(prog(tt, 0.55 * tk, 0.7 * tk));
+    property <float> title-k: anim != 0 || outing ? 1 : ease-out(prog(tt, 0.68 * tk, 0.7 * tk));
+    property <float> corner-k: anim != 0 ? 1 : outing ? 1 - prog(to, 0, 0.2 * tk) : ease-out(prog(tt, 0.9 * tk, 0.5 * tk));
+    // «Сбоку», «Снизу», «Плавно»: the whole plate as one piece
+    property <float> in-k: anim == 3 ? prog(tt, 0.05 * tk, 0.9 * tk) : ease-out(prog(tt, 0.05 * tk, 0.8 * tk));
+    property <float> out-k: anim == 3 ? prog(to, 0, 0.7 * tk) : ease-in(prog(to, 0, 0.6 * tk));
+    property <float> group-op: anim == 0 ? 1 : outing ? 1 - out-k : in-k;
+    property <length> group-dx: anim == 1 ? (outing ? -90px * sc * out-k : -90px * sc * (1 - in-k)) : 0px;
+    property <length> group-dy: anim == 2 ? (outing ? 40px * sc * out-k : 60px * sc * (1 - in-k)) : 0px;
+
+    property <color> plate-bg: plate == 1 ? #f6f4f2eb : plate == 2 ? accent : #08080ac7;
+    property <color> ink: plate == 0 ? #f4f1ef : #141416;
+    property <color> ink-2: plate == 0 ? #f4f1efc7 : #141416bd;
+    property <color> spine-c: plate == 2 ? #141416 : accent;
+
+    property <length> pad-l: 30px * sc;
+    property <length> pad-r: 40px * sc;
+    property <length> pad-v: 26px * sc;
+    property <length> name-h: 46px * 1.12 * sc;
+    property <length> title-h: 25px * 1.3 * sc;
+    property <bool> has-title: title != "";
+    property <length> text-w: max(name-t.preferred-width, has-title ? 36px * sc + title-t.preferred-width : 0px);
+    property <length> pw: pad-l + text-w + pad-r;
+    property <length> ph: pad-v * 2 + name-h + (has-title ? 8px * sc + title-h : 0px);
+    property <length> x0: 112px * sc;
+    // the plate's bottom is 118 px above the frame's bottom: y 962 of 1080, i.e. 422 in the stage
+    property <length> y0: 422px * sc - ph;
+
+    Rectangle {
+        clip: true;
+        border-radius: 8px;
+        background: @linear-gradient(135deg, #2b2f3a 0%, #4a3d3a 60%, #1d1f26 100%);
+        // the program picture behind, same region of it
+        if has-frame : Image {
+            width: parent.width;
+            height: parent.height;
+            source: frame;
+            source-clip-x: round(crop-x * frame.width);
+            source-clip-y: round((crop-y + crop-h / 2) * frame.height);
+            source-clip-width: max(1, round(crop-w / 2 * frame.width));
+            source-clip-height: max(1, round(crop-h / 2 * frame.height));
+            image-fit: fill;
+            image-rendering: smooth;
+        }
+
+        Rectangle {
+            x: group-dx;
+            y: group-dy;
+            width: parent.width;
+            height: parent.height;
+            opacity: group-op;
+
+            // spine grows from the bottom
+            Rectangle { x: x0; y: y0 + ph * (1 - spine-k); width: 6px * sc; height: ph * spine-k; background: spine-c; }
+
+            // plate, wiped open from the left
+            Rectangle {
+                x: x0 + 6px * sc;
+                y: y0;
+                width: pw * wipe-k;
+                height: ph;
+                clip: true;
+                Rectangle { x: 0; y: 0; width: pw; height: ph; background: plate-bg; }
+                Rectangle {
+                    x: pad-l;
+                    y: pad-v;
+                    width: text-w;
+                    height: name-h;
+                    clip: true;
+                    name-t := Text {
+                        x: 0;
+                        y: name-h * 1.1 * (1 - name-k);
+                        height: name-h;
+                        text: name;
+                        font-family: "Unbounded";
+                        font-weight: 900;
+                        font-size: 46px * sc;
+                        letter-spacing: 0.46px * sc;
+                        color: ink;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle {
+                    visible: has-title;
+                    x: pad-l;
+                    y: pad-v + name-h + 8px * sc;
+                    width: text-w;
+                    height: title-h;
+                    clip: true;
+                    Rectangle {
+                        x: 0;
+                        y: title-h * 1.1 * (1 - title-k) + (title-h - 3px * sc) / 2;
+                        width: 22px * sc;
+                        height: 3px * sc;
+                        background: spine-c;
+                    }
+                    title-t := Text {
+                        x: 36px * sc;
+                        y: title-h * 1.1 * (1 - title-k);
+                        height: title-h;
+                        text: title;
+                        font-family: T.ui;
+                        font-weight: 700;
+                        font-size: 25px * sc;
+                        color: ink-2;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // viewfinder corner, top right
+            Rectangle {
+                x: x0 + pw - 4px * sc - 6px * sc * (1 - corner-k);
+                y: y0 - 12px * sc + 6px * sc * (1 - corner-k);
+                width: 22px * sc;
+                height: 22px * sc;
+                opacity: corner-k;
+                Rectangle { x: 0; y: 0; width: parent.width; height: 3px * sc; background: accent; }
+                Rectangle { x: parent.width - 3px * sc; y: 0; width: 3px * sc; height: parent.height; background: accent; }
+            }
+        }
+
+        // what the stage shows
+        Rectangle {
+            x: parent.width - self.width - 8px;
+            y: 8px;
+            width: hint-t.preferred-width + 14px;
+            height: 20px;
+            border-radius: 5px;
+            background: #00000080;
+            hint-t := Tag { text: playing ? I18n.tr("ИДЁТ ПОКАЗ") : I18n.tr("ПРЕДПРОСМОТР"); color: playing ? T.accent : T.text-3; horizontal-alignment: center; }
+        }
+    }
+    Rectangle { border-radius: 8px; border-width: 1px; border-color: T.line; }
+
+    Timer {
+        interval: 16ms;
+        running: root.playing;
+        triggered => {
+            root.time += 0.016;
+            if (root.time > root.t-end) {
+                root.playing = false;
+                root.time = 0;
+            }
+        }
+    }
+}
+
+// ── Dialogs (drawn inside the window) ─────────────────────────────────────────────
+
+component Overlay inherits Rectangle {
+    background: #000000b4;
+    TouchArea { }  // swallow clicks behind the dialog
+}
+
+/// App settings: language, OBS connection, start-up, hot keys.
+component SettingsDialog inherits Overlay {
+    in-out property <int> lang;
+    in-out property <string> host;
+    in-out property <int> port: 4455;
+    in-out property <string> password;
+    in-out property <bool> auto-connect: true;
+    in-out property <bool> auto-start;
+    in-out property <bool> start-minimized;
+    in property <string> result-text;
+    in property <color> result-color: T.text-muted;
+    callback lang-changed(int);
+    callback test();
+    callback save();
+    callback cancel();
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: max(20px, (parent.height - self.height) / 2);
+        width: 520px;
+        height: min(lay.preferred-height, parent.height - 40px);
+        background: T.card;
+        border-width: 1px;
+        border-color: T.line-strong;
+        border-radius: 14px;
+        clip: true;
+        lay := VerticalLayout {
+            padding: 24px;
+            spacing: 22px;
+            HorizontalLayout {
+                Text { text: I18n.tr("Настройки"); font-family: T.ui; font-weight: 800; font-size: 18px; color: T.text; vertical-alignment: center; horizontal-stretch: 1; }
+                IconButton { icon: "close"; clicked => { root.cancel(); } }
+            }
+
+            Group {
+                title: I18n.tr("Язык");
+                Segmented {
+                    items: ["Русский", "English"];
+                    index <=> root.lang;
+                    changed(i) => { root.lang-changed(i); }
+                }
+            }
+
+            Group {
+                title: I18n.tr("Подключение к OBS");
+                Small { text: I18n.tr("В OBS: Инструменты → Настройки сервера WebSocket. Адрес, порт и пароль — оттуда же."); wrap: word-wrap; color: T.text-meta; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Field {
+                        label: I18n.tr("Адрес");
+                        horizontal-stretch: 1;
+                        TextField { text <=> root.host; placeholder-text: "localhost"; }
+                    }
+                    Field {
+                        label: I18n.tr("Порт");
+                        width: 140px;
+                        SpinBox { value <=> root.port; minimum: 1; maximum: 65535; }
+                    }
+                }
+                Field {
+                    label: I18n.tr("Пароль");
+                    TextField { text <=> root.password; input-type: InputType.password; placeholder-text: I18n.tr("без пароля"); }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Button { text: I18n.tr("Проверить"); h: 32px; clicked => { root.test(); } }
+                    if result-text != "" : HorizontalLayout {
+                        spacing: 8px;
+                        horizontal-stretch: 1;
+                        Rectangle { width: 6px; height: 6px; y: 13px; border-radius: 3px; background: result-color; }
+                        Label { text: result-text; font-size: 12px; wrap: word-wrap; horizontal-stretch: 1; }
+                    }
+                    if result-text == "" : Rectangle { horizontal-stretch: 1; }
+                }
+                Row { label: I18n.tr("Подключаться при запуске"); Switch { checked <=> root.auto-connect; } }
+            }
+
+            Group {
+                title: I18n.tr("Запуск");
+                Row { label: I18n.tr("Сразу включать слежение"); Switch { checked <=> root.auto-start; } }
+                Row { label: I18n.tr("Запускать свёрнутым"); Switch { checked <=> root.start-minimized; } }
+            }
+
+            Group {
+                title: I18n.tr("Горячие клавиши");
+                Keycap { key: "F5"; text: I18n.tr("включить / выключить слежение"); }
+                Keycap { key: I18n.tr("Пробел"); text: I18n.tr("общий план"); }
+                Keycap { key: "N"; text: I18n.tr("показать плашку"); }
+                Keycap { key: I18n.tr("Клик"); text: I18n.tr("выбрать спикера на камере"); }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: end;
+                Button { text: I18n.tr("Отмена"); clicked => { root.cancel(); } }
+                Button { text: I18n.tr("Сохранить"); kind: 1; clicked => { root.save(); } }
+            }
+        }
+    }
+}
+
+component MessageDialog inherits Overlay {
+    in property <string> text;
+    callback close();
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 420px;
+        height: lay.preferred-height;
+        background: T.card;
+        border-width: 1px;
+        border-color: T.line-strong;
+        border-radius: 14px;
+        clip: true;
+        lay := VerticalLayout {
+            Rectangle { height: 3px; background: T.danger-fill; }
+            VerticalLayout {
+                padding: 24px;
+                spacing: 18px;
+                Label { text: root.text; color: T.text; wrap: word-wrap; }
+                HorizontalLayout {
+                    alignment: end;
+                    Button { text: I18n.tr("Понятно"); kind: 1; clicked => { root.close(); } }
+                }
+            }
+        }
+    }
+}
+
+// ── Main window ───────────────────────────────────────────────────────────────────
+
+export component AppWindow inherits Window {
+    title: I18n.tr("В кадре");
+    icon: @image-url("../assets/icon.png");
+    preferred-width: 1440px;
+    preferred-height: 880px;
+    min-width: 1100px;
+    min-height: 680px;
+    background: T.bg;
+    default-font-family: T.ui;
+    default-font-weight: 500;
+    default-font-size: 13px;
+
+    // header
+    in property <bool> running;
+    in-out property <bool> wide-checked;
+    in-out property <bool> zone-checked;
+    /// 0 stopped, 1 waiting for a scene, 2 following a scene
+    in property <int> tally-state;
+    in property <string> tally-text;
+    in property <string> obs-text;
+    in property <bool> obs-ok;
+
+    // camera monitor
+    in property <bool> has-frame;
+    in property <image> frame;
+    in property <float> frame-aspect: 16 / 9;
+    in property <[PersonBox]> people;
+    in property <[Dot]> dots;
+    in property <float> crop-x;
+    in property <float> crop-y;
+    in property <float> crop-w: 1;
+    in property <float> crop-h: 1;
+    in property <float> zone-x;
+    in property <float> zone-y;
+    in property <float> zone-w: 1;
+    in property <float> zone-h: 1;
+    in property <bool> active;
+    in property <bool> paused;
+    in property <string> source-name;
+    in property <string> state-text;
+    in property <string> hud;
+    in property <string> message-title;
+    in property <string> message-hint;
+    in property <int> empty-kind;
+    in property <string> fault;
+
+    // program monitor + readouts
+    in property <bool> air-live;
+    in property <string> air-scene;
+    in property <string> air-meta;
+    in property <string> ro-zoom: "—";
+    in property <string> ro-shot: "—";
+    in property <string> ro-match: "—";
+    in property <string> ro-camera: "—";
+    in property <bool> ro-camera-bad;
+
+    // status line (kept for messages; shown under the capsule's tooltip-free design in the bus header)
+    in property <string> status-text;
+    in property <color> status-color: T.text-faint;
+    in property <string> footer-device;
+    in property <string> version;
+
+    // tabs
+    in-out property <int> tab;
+    /// the name plate preview is playing (bound to the preview; set from Rust for --plate-play)
+    in-out property <bool> plate-playing;
+
+    // settings dialog
+    in-out property <bool> show-settings;
+    in-out property <int> set-lang;
+    in-out property <string> conn-host;
+    in-out property <int> conn-port: 4455;
+    in-out property <string> conn-password;
+    in-out property <bool> conn-auto: true;
+    in-out property <bool> set-auto-start;
+    in-out property <bool> set-minimized;
+    in property <string> conn-result;
+    in property <color> conn-result-color: T.text-muted;
+    in-out property <string> error-text;
+
+    callback toggle-run();
+    callback wide-toggled(bool);
+    callback retarget();
+    callback zone-reset();
+    callback show-plate();
+    callback open-settings();
+    callback lang-changed(int);
+    callback conn-test();
+    callback settings-save();
+    callback settings-cancel();
+    callback preview-clicked(float, float);
+    callback zone-drawn(float, float, float, float);
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.F5) {
+                root.toggle-run();
+                return accept;
+            }
+            if (show-settings || error-text != "") { return reject; }
+            if (event.text == " ") {
+                wide-checked = !wide-checked;
+                root.wide-toggled(wide-checked);
+                return accept;
+            }
+            if (event.text == "n" || event.text == "N" || event.text == "т" || event.text == "Т") {
+                root.show-plate();
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            // ── header
+            Rectangle {
+                height: 56px;
+                Rectangle { y: parent.height - 1px; height: 1px; background: T.line-soft; }
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+                    spacing: 10px;
+                    // logo · name · version
+                    HorizontalLayout {
+                        spacing: 10px;
+                        horizontal-stretch: 1;
+                        VerticalLayout { alignment: center; Image { source: @image-url("../assets/icon.png"); width: 36px; height: 36px; image-rendering: smooth; } }
+                        Text { text: I18n.tr("В кадре"); font-family: T.ui; font-weight: 800; font-size: 17px; color: T.text; vertical-alignment: center; }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                height: 20px;
+                                width: ver.preferred-width + 12px;
+                                border-radius: 5px;
+                                border-width: 1px;
+                                border-color: T.line-strong;
+                                ver := Mono { text: "v" + version; font-size: 10px; color: T.text-meta; horizontal-alignment: center; }
+                            }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    // status capsule: OBS · tracking · start
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 38px;
+                            width: cap.preferred-width;
+                            border-radius: 19px;
+                            border-width: 1px;
+                            border-color: T.line;
+                            background: T.card;
+                            cap := HorizontalLayout {
+                                padding-left: 14px;
+                                padding-right: 4px;
+                                spacing: 12px;
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    Rectangle { width: 7px; height: 7px; y: 15.5px; border-radius: 3.5px; background: obs-ok ? T.accent : T.danger; }
+                                    Label { text: obs-text; font-size: 12px; font-weight: 700; color: obs-ok ? T.text-2 : T.danger; }
+                                }
+                                Rectangle { width: 1px; height: 16px; y: 11px; background: T.line-strong; }
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    Rectangle {
+                                        width: 8px;
+                                        if tally-state == 2 : Rectangle { x: -3px; y: 12px; width: 14px; height: 14px; border-radius: 7px; background: T.live.with-alpha(0.25); }
+                                        Rectangle { y: 15px; width: 8px; height: 8px; border-radius: tally-state == 0 ? 1px : 4px; background: tally-state == 2 ? T.live : tally-state == 1 ? T.warn : T.text-faint; }
+                                    }
+                                    Label { text: tally-text; font-size: 12px; font-weight: 700; color: tally-state == 2 ? T.accent : T.text-muted; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        height: 30px;
+                                        width: run-row.preferred-width;
+                                        border-radius: 15px;
+                                        background: running ? (rta.has-hover ? #f0353a : T.danger-fill) : (rta.has-hover ? T.accent-hover : T.accent);
+                                        run-row := HorizontalLayout {
+                                            padding-left: 14px;
+                                            padding-right: 14px;
+                                            spacing: 8px;
+                                            if running : Rectangle { width: 9px; height: 9px; y: 10.5px; border-radius: 1px; background: Colors.white; }
+                                            if !running : Path {
+                                                width: 10px;
+                                                height: 10px;
+                                                y: 10px;
+                                                viewbox-width: 12;
+                                                viewbox-height: 12;
+                                                fill: T.on-accent;
+                                                commands: "M2 1 L11 6 L2 11 Z";
+                                            }
+                                            Label {
+                                                text: (running ? I18n.tr("Выключить") : I18n.tr("Включить")) + " · F5";
+                                                font-size: 12px;
+                                                font-weight: 800;
+                                                color: running ? Colors.white : T.on-accent;
+                                            }
+                                        }
+                                        rta := TouchArea { mouse-cursor: pointer; clicked => { root.toggle-run(); } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        alignment: end;
+                        VerticalLayout {
+                            alignment: center;
+                            Button { text: I18n.tr("Настройки"); h: 34px; clicked => { root.open-settings(); } }
+                        }
+                    }
+                }
+            }
+
+            // ── body
+            HorizontalLayout {
+                vertical-stretch: 1;
+
+                // input side: camera card + scene bus card
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    padding: 12px;
+                    spacing: 12px;
+                    Rectangle {
+                        vertical-stretch: 1;
+                        border-radius: 14px;
+                        background: T.card;
+                        border-width: 1px;
+                        border-color: T.line-soft;
+                        VerticalLayout {
+                            padding: 14px;
+                            CameraMonitor {
+                                has-frame: root.has-frame;
+                                frame: root.frame;
+                                aspect: root.frame-aspect;
+                                people: root.people;
+                                dots: root.dots;
+                                crop-x: root.crop-x;
+                                crop-y: root.crop-y;
+                                crop-w: root.crop-w;
+                                crop-h: root.crop-h;
+                                zone-x: root.zone-x;
+                                zone-y: root.zone-y;
+                                zone-w: root.zone-w;
+                                zone-h: root.zone-h;
+                                active: root.active;
+                                paused: root.paused;
+                                source-name: root.source-name;
+                                state-text: root.state-text;
+                                hud: root.hud;
+                                message-title: root.message-title;
+                                message-hint: root.message-hint;
+                                empty-kind: root.empty-kind;
+                                fault: root.fault;
+                                zone-mode <=> root.zone-checked;
+                                wide-checked <=> root.wide-checked;
+                                clicked(x, y) => {
+                                    keys.focus();
+                                    root.preview-clicked(x, y);
+                                }
+                                zone-drawn(x0, y0, x1, y1) => {
+                                    root.zone-checked = false;
+                                    root.zone-drawn(x0, y0, x1, y1);
+                                }
+                                wide-toggled(on) => { root.wide-toggled(on); }
+                                retarget => { root.retarget(); }
+                                zone-reset => { root.zone-reset(); }
+                                show-plate => { root.show-plate(); }
+                                reconnect => { Cfg.refresh(); }
+                                how-to => { root.open-settings(); }
+                                start => { root.toggle-run(); }
+                            }
+                        }
+                    }
+
+                    // scene bus
+                    Rectangle {
+                        height: 132px;
+                        border-radius: 14px;
+                        background: T.card;
+                        border-width: 1px;
+                        border-color: T.line-soft;
+                        HorizontalLayout {
+                            padding: 14px;
+                            spacing: 14px;
+                            VerticalLayout {
+                                width: 116px;
+                                spacing: 2px;
+                                Tag { text: I18n.tr("СЦЕНЫ OBS"); }
+                                Text {
+                                    text: (Cfg.scene-rows.length < 10 ? "0" : "") + Cfg.scene-rows.length;
+                                    font-family: T.mono;
+                                    font-weight: 800;
+                                    font-size: 26px;
+                                    color: T.text;
+                                }
+                                Rectangle { vertical-stretch: 1; }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    Rectangle {
+                                        height: 28px;
+                                        width: ref-row.preferred-width;
+                                        border-radius: 7px;
+                                        border-width: 1px;
+                                        border-color: rfa.has-hover && !Cfg.running ? T.line-hover : T.line-strong;
+                                        opacity: Cfg.running ? 0.4 : 1;
+                                        ref-row := HorizontalLayout {
+                                            padding-left: 8px;
+                                            padding-right: 10px;
+                                            spacing: 5px;
+                                            Icon { name: "refresh"; width: 13px; height: 13px; y: 7.5px; tint: T.text-muted; }
+                                            Label { text: I18n.tr("Обновить"); font-size: 12px; font-weight: 700; }
+                                        }
+                                        rfa := TouchArea { enabled: !Cfg.running; mouse-cursor: pointer; clicked => { Cfg.refresh(); } }
+                                    }
+                                }
+                            }
+                            Rectangle { width: 1px; background: T.line; }
+                            if Cfg.scene-rows.length == 0 : Small { text: Cfg.scenes-empty-text; color: T.text-faint; horizontal-stretch: 1; }
+                            // a Flickable reports its content as its max width; without these limits the
+                            // whole left column shrinks to the tiles when the window is wide
+                            if Cfg.scene-rows.length > 0 : Flickable {
+                                horizontal-stretch: 1;
+                                min-width: 0px;
+                                max-width: 100000px;
+                                viewport-width: tiles.preferred-width;
+                                tiles := HorizontalLayout {
+                                    spacing: 10px;
+                                    for row[i] in Cfg.scene-rows : SceneTile {
+                                        index: row.index;
+                                        name: row.name;
+                                        mode: row.mode;
+                                        on-air: row.on-air;
+                                        has-camera: row.has-camera;
+                                        enabled: !Cfg.running && row.has-camera;
+                                        pick(j) => { Cfg.scene-mode-changed(i, j); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // output side: program, readouts, settings
+                Rectangle {
+                    width: 360px;
+                    Rectangle { x: 0; width: 1px; background: T.line-soft; }
+                    VerticalLayout {
+                        padding-left: 18px;
+                        padding-right: 12px;
+                        padding-top: 12px;
+                        padding-bottom: 8px;
+                        spacing: 14px;
+                        ProgramMonitor {
+                            has-frame: root.has-frame;
+                            frame: root.frame;
+                            crop-x: root.crop-x;
+                            crop-y: root.crop-y;
+                            crop-w: root.crop-w;
+                            crop-h: root.crop-h;
+                            live: root.air-live;
+                            scene: root.air-scene;
+                            meta: root.air-meta;
+                        }
+                        Rectangle {
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: T.line;
+                            HorizontalLayout {
+                                Readout { first: true; label: I18n.tr("Зум"); value: root.ro-zoom; mono: true; }
+                                Readout { label: I18n.tr("План"); value: root.ro-shot; }
+                                Readout { label: I18n.tr("Узнаю"); value: root.ro-match; mono: true; }
+                                Readout { label: I18n.tr("Камера"); value: root.ro-camera; bad: root.ro-camera-bad; }
+                            }
+                        }
+
+                        // tabs
+                        Rectangle {
+                            height: 36px;
+                            Rectangle { y: parent.height - 1px; height: 1px; background: T.line; }
+                            HorizontalLayout {
+                                spacing: 0;
+                                for name[i] in [I18n.tr("Кадр"), I18n.tr("Движение"), I18n.tr("Спикер"), I18n.tr("Плашка"), I18n.tr("Камера")] : Rectangle {
+                                    horizontal-stretch: 1;
+                                    tl := Label {
+                                        text: name;
+                                        font-weight: root.tab == i ? 800 : 500;
+                                        horizontal-alignment: center;
+                                        color: root.tab == i ? T.text : tta.has-hover ? T.text-2 : T.text-muted;
+                                    }
+                                    if root.tab == i : Rectangle { y: parent.height - 2px; height: 2px; border-radius: 1px; background: T.accent; }
+                                    tta := TouchArea { mouse-cursor: pointer; clicked => { root.tab = i; } }
+                                }
+                            }
+                        }
+
+                        settings-scroll := ScrollView {
+                            vertical-stretch: 1;
+                            viewport-width: self.visible-width;
+                            // the content's own height, so a tab opens at its top
+                            viewport-height: tab-box.preferred-height;
+                            tab-box := VerticalLayout {
+                                x: 0;
+                                y: 0;
+                                width: settings-scroll.visible-width;
+                                height: self.preferred-height;
+                                padding-right: 6px;
+                                padding-bottom: 12px;
+                                alignment: start;
+
+                                // ── Кадр
+                                if root.tab == 0 : VerticalLayout {
+                                    alignment: start;
+                                    spacing: 18px;
+                                    Field {
+                                        label: I18n.tr("Источник");
+                                        enabled: !Cfg.running;
+                                        ComboBox {
+                                            enabled: !Cfg.running;
+                                            model: Cfg.sources;
+                                            current-index: Cfg.source-index;
+                                            selected(v) => {
+                                                Cfg.source-index = self.current-index;
+                                                Cfg.source-selected(self.current-index);
+                                            }
+                                        }
+                                    }
+                                    Field {
+                                        label: I18n.tr("План");
+                                        Segmented {
+                                            items: [I18n.tr("Грудь"), I18n.tr("Пояс"), I18n.tr("Бёдра"), I18n.tr("Колено"), I18n.tr("Фикс.")];
+                                            index <=> Cfg.shot-index;
+                                            changed => { Cfg.changed(); }
+                                        }
+                                    }
+                                    if Cfg.shot-index == 4 : SliderRow { label: I18n.tr("Зум"); fmt: "x1"; minimum: 1.0; maximum: 4.0; step: 0.1; value <=> Cfg.fixed-zoom; changed => { Cfg.changed(); } }
+                                    SliderRow { label: I18n.tr("Макс. зум"); fmt: "x1"; minimum: 1.0; maximum: 4.0; step: 0.1; value <=> Cfg.max-zoom; changed => { Cfg.changed(); } }
+                                    SliderRow { label: I18n.tr("Над головой"); fmt: "pct0"; minimum: 0.0; maximum: 0.25; step: 0.01; value <=> Cfg.headroom; changed => { Cfg.changed(); } }
+                                    Group {
+                                        title: I18n.tr("Монтаж");
+                                        rule: true;
+                                        Row {
+                                            label: I18n.tr("Два плана из одной камеры");
+                                            hint: I18n.tr("Общий и крупный — из одного источника");
+                                            Switch { checked <=> Cfg.auto-cut; toggled => { Cfg.changed(); } }
+                                        }
+                                        if Cfg.auto-cut : Segmented {
+                                            items: [I18n.tr("Бёдра"), I18n.tr("Колено"), I18n.tr("Рост")];
+                                            index <=> Cfg.cut-index;
+                                            changed => { Cfg.changed(); }
+                                        }
+                                        if Cfg.auto-cut : SliderRow { label: I18n.tr("Не чаще"); fmt: "s0"; minimum: 2; maximum: 20; step: 1; value <=> Cfg.cut-hold; changed => { Cfg.changed(); } }
+                                    }
+                                }
+
+                                // ── Движение
+                                if root.tab == 1 : VerticalLayout {
+                                    alignment: start;
+                                    spacing: 18px;
+                                    SliderRow { label: I18n.tr("Плавность"); fmt: "s2"; minimum: 0.2; maximum: 2.5; step: 0.05; value <=> Cfg.smooth; changed => { Cfg.changed(); } }
+                                    SliderRow { label: I18n.tr("Мёртвая зона"); fmt: "pct0"; minimum: 0; maximum: 0.35; step: 0.01; value <=> Cfg.deadzone; changed => { Cfg.changed(); } }
+                                    SliderRow { label: I18n.tr("Скорость"); fmt: "f2"; minimum: 0.05; maximum: 1.0; step: 0.05; value <=> Cfg.speed; changed => { Cfg.changed(); } }
+                                    SliderRow { label: I18n.tr("Плавность зума"); fmt: "s1"; minimum: 0.3; maximum: 5.0; step: 0.1; value <=> Cfg.zoom-smooth; changed => { Cfg.changed(); } }
+                                }
+
+                                // ── Спикер
+                                if root.tab == 2 : VerticalLayout {
+                                    alignment: start;
+                                    spacing: 14px;
+                                    Row { label: I18n.tr("Узнавать по одежде"); Switch { checked <=> Cfg.reid; toggled => { Cfg.changed(); } } }
+                                    Row { label: I18n.tr("Пропал — общий план"); Switch { checked <=> Cfg.wide-on-lost; toggled => { Cfg.changed(); } } }
+                                    if Cfg.wide-on-lost : SliderRow { label: I18n.tr("Через"); fmt: "s1"; minimum: 0.5; maximum: 30; step: 0.5; value <=> Cfg.lost-timeout; changed => { Cfg.changed(); } }
+                                }
+
+                                // ── Плашка: only by hand (button, N)
+                                if root.tab == 3 : VerticalLayout {
+                                    alignment: start;
+                                    spacing: 16px;
+                                    Field {
+                                        label: I18n.tr("Имя");
+                                        TextField { text <=> Cfg.lt-name; placeholder-text: I18n.tr("Алексей Смирнов"); edited => { Cfg.changed(); } }
+                                    }
+                                    Field {
+                                        label: I18n.tr("Подпись");
+                                        TextField { text <=> Cfg.lt-title; placeholder-text: I18n.tr("Пастор церкви"); edited => { Cfg.changed(); } }
+                                    }
+                                    Group {
+                                        title: I18n.tr("Вид");
+                                        rule: true;
+                                        HorizontalLayout {
+                                            spacing: 2px;
+                                            for c[i] in Cfg.lt-swatches : Rectangle {
+                                                width: 28px;
+                                                height: 28px;
+                                                if Cfg.lt-color-index == i : Rectangle { border-radius: 14px; border-width: 2px; border-color: T.text; }
+                                                Rectangle { x: 5px; y: 5px; width: 18px; height: 18px; border-radius: 9px; background: c; }
+                                                TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        Cfg.lt-color-index = i;
+                                                        Cfg.changed();
+                                                    }
+                                                }
+                                            }
+                                            Rectangle {
+                                                width: 28px;
+                                                height: 28px;
+                                                if Cfg.lt-color-index == Cfg.lt-swatches.length : Rectangle { border-radius: 14px; border-width: 2px; border-color: T.text; }
+                                                Rectangle {
+                                                    x: 5px;
+                                                    y: 5px;
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    background: Cfg.lt-custom-hex != "" ? Cfg.lt-custom-color : transparent;
+                                                    border-width: Cfg.lt-custom-hex != "" ? 0 : 1px;
+                                                    border-color: T.line-hover;
+                                                }
+                                                TouchArea {
+                                                    mouse-cursor: pointer;
+                                                    clicked => {
+                                                        if (Cfg.lt-custom-hex != "") {
+                                                            Cfg.lt-color-index = Cfg.lt-swatches.length;
+                                                            Cfg.changed();
+                                                        } else {
+                                                            hex.take-focus();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Rectangle { width: 8px; }
+                                            hex := TextField {
+                                                horizontal-stretch: 1;
+                                                placeholder-text: "#rrggbb";
+                                                text: Cfg.lt-custom-hex;
+                                                accepted(t) => { Cfg.custom-hex-edited(t); }
+                                                edited(t) => {
+                                                    if (t.character-count == 7) { Cfg.custom-hex-edited(t); }
+                                                }
+                                            }
+                                        }
+                                        Segmented { items: [I18n.tr("Тёмный"), I18n.tr("Светлый"), I18n.tr("Цветной")]; index <=> Cfg.lt-plate-index; changed => { Cfg.changed(); } }
+                                        Segmented { items: [I18n.tr("Шторка"), I18n.tr("Сбоку"), I18n.tr("Снизу"), I18n.tr("Плавно")]; index <=> Cfg.lt-anim-index; changed => { Cfg.changed(); } }
+                                    }
+                                    SliderRow { label: I18n.tr("На экране"); fmt: "s0"; minimum: 3; maximum: 15; step: 1; value <=> Cfg.lt-duration; changed => { Cfg.changed(); } }
+                                    SliderRow { label: I18n.tr("Скорость"); fmt: "x1"; minimum: 0.5; maximum: 2.0; step: 0.1; value <=> Cfg.lt-speed; changed => { Cfg.changed(); } }
+                                }
+
+                                // ── Камера
+                                if root.tab == 4 : VerticalLayout {
+                                    alignment: start;
+                                    spacing: 18px;
+                                    Group {
+                                        title: I18n.tr("Сторож камеры");
+                                        Row { label: I18n.tr("Следить за камерой"); hint: I18n.tr("Чёрный кадр, зависшая картинка, нет сигнала"); Switch { checked <=> Cfg.watchdog; toggled => { Cfg.changed(); } } }
+                                        if Cfg.watchdog : Row { label: I18n.tr("Звук тревоги"); Switch { checked <=> Cfg.watchdog-sound; toggled => { Cfg.changed(); } } }
+                                        if Cfg.watchdog : Row { label: I18n.tr("Уводить эфир на запасную сцену"); Switch { checked <=> Cfg.watchdog-switch; toggled => { Cfg.changed(); } } }
+                                        if Cfg.watchdog && Cfg.watchdog-switch : ComboBox {
+                                            model: Cfg.backup-scenes;
+                                            current-index: Cfg.backup-index;
+                                            selected(v) => {
+                                                Cfg.backup-index = self.current-index;
+                                                Cfg.changed();
+                                            }
+                                        }
+                                    }
+                                    Group {
+                                        title: I18n.tr("Производительность");
+                                        rule: true;
+                                        Row { label: I18n.tr("Видеокарта"); enabled: !Cfg.running; Switch { enabled: !Cfg.running; checked <=> Cfg.use-gpu; toggled => { Cfg.changed(); } } }
+                                        Row {
+                                            label: I18n.tr("Кадров нейросети в секунду");
+                                            SpinBox { width: 96px; minimum: 2; maximum: 30; value <=> Cfg.detect-fps; edited => { Cfg.changed(); } }
+                                        }
+                                        Row { label: I18n.tr("Устройство"); Mono { text: Cfg.device; color: T.text-muted; } }
+                                    }
+                                }
+                            }
+                        }
+
+                            // name plate preview, pinned under the plate settings so it stays in view
+                            if root.tab == 3 : Group {
+                                title: I18n.tr("Предпросмотр");
+                                rule: true;
+                                plate-preview := PlatePreview {
+                                    name: Cfg.lt-name-upper != "" ? Cfg.lt-name-upper : I18n.tr("ИМЯ ФАМИЛИЯ");
+                                    title: Cfg.lt-name-upper != "" ? Cfg.lt-title : I18n.tr("Подпись");
+                                    accent: Cfg.lt-color-index < Cfg.lt-swatches.length ? Cfg.lt-swatches[Cfg.lt-color-index] : Cfg.lt-custom-color;
+                                    plate: Cfg.lt-plate-index;
+                                    anim: Cfg.lt-anim-index;
+                                    speed: Cfg.lt-speed;
+                                    duration: Cfg.lt-duration;
+                                    has-frame: root.has-frame;
+                                    frame: root.frame;
+                                    crop-x: root.crop-x;
+                                    crop-y: root.crop-y;
+                                    crop-w: root.crop-w;
+                                    crop-h: root.crop-h;
+                                    playing <=> root.plate-playing;
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    Button {
+                                        horizontal-stretch: 1;
+                                        text: plate-preview.playing ? I18n.tr("Остановить") : I18n.tr("Проиграть");
+                                        clicked => {
+                                            plate-preview.time = 0;
+                                            plate-preview.playing = !plate-preview.playing;
+                                        }
+                                    }
+                                    Button { horizontal-stretch: 1; text: I18n.tr("Показать в эфире"); kind: 1; clicked => { Cfg.show-plate(); } }
+                                }
+                            }
+
+                        // status line, quiet, under the settings
+                        HorizontalLayout {
+                            height: 22px;
+                            spacing: 7px;
+                            Rectangle { width: 6px; height: 6px; y: 8px; border-radius: 3px; background: status-color; }
+                            Small { text: status-text; font-size: 11px; color: T.text-meta; overflow: elide; horizontal-stretch: 1; }
+                            Mono { text: footer-device; font-size: 10px; color: T.text-faint; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if show-settings : SettingsDialog {
+        width: root.width;
+        height: root.height;
+        lang <=> root.set-lang;
+        host <=> root.conn-host;
+        port <=> root.conn-port;
+        password <=> root.conn-password;
+        auto-connect <=> root.conn-auto;
+        auto-start <=> root.set-auto-start;
+        start-minimized <=> root.set-minimized;
+        result-text: root.conn-result;
+        result-color: root.conn-result-color;
+        lang-changed(i) => { root.lang-changed(i); }
+        test => { root.conn-test(); }
+        save => { root.settings-save(); }
+        cancel => {
+            root.settings-cancel();
+            keys.focus();
+        }
+    }
+
+    if error-text != "" : MessageDialog {
+        width: root.width;
+        height: root.height;
+        text: root.error-text;
+        close => {
+            root.error-text = "";
+            keys.focus();
+        }
+    }
+
+    init => { keys.focus(); }
+}

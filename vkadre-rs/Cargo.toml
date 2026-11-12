@@ -1,0 +1,42 @@
+[package]
+name = "vkadre"
+version = "0.1.0"
+edition = "2021"
+description = "«В кадре» — automatic speaker framing for OBS Studio"
+license = "AGPL-3.0-only"
+publish = false
+
+[[bin]]
+name = "VKadre"
+path = "src/main.rs"
+
+[dependencies]
+slint = "1.8"
+ort = { version = "=2.0.0-rc.9", features = ["directml"] }
+# ort rc.9 accepts any newer ort-sys rc, which needs a different build setup: pin the matching one
+ort-sys = { version = "=2.0.0-rc.9", default-features = false }
+ndarray = "0.16"
+tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+indexmap = { version = "2", features = ["serde"] }
+sha2 = "0.10"
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+log = "0.4"
+anyhow = "1"
+
+[build-dependencies]
+slint-build = "1.8"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 2
