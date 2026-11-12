@@ -1,6 +1,0 @@
-﻿=== Speaker tracker: install ===
-
-Using: py -3.11
-Python 3.11.9
-
-[1/4] Creating virtual environment .venv ...

@@ -1,0 +1,31 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.spec.bak
+
+# Build output (publish binaries via GitHub Releases, not the repo)
+build/
+dist/
+dist-rs/
+vkadre-rs/target/
+*.exe
+*.pkg
+
+# Models: only the bundled ONNX model is tracked
+*.pt
+
+# Old prototype (kept locally only)
+speaker_tracker/
+
+# Logs, archives, editor/OS junk
+*.log
+*.rar
+*.zip
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+.DS_Store
